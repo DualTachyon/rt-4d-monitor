@@ -230,7 +230,7 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                                                         break;
 
                                                 case 0x05:
-                                                        strcat_s(pOut, 1024, "AES128 =");
+                                                        strcat_s(pOut, 1024, "AES256 =");
                                                         KeyLength = 32;
                                                         break;
                                                 }
