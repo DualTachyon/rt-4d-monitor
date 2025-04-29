@@ -213,7 +213,7 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                                 break;
 
                         case 0x59: // Digital service status
-                                if (pFrame->RW == DMR_RW_TO_HOST) {
+                                if (pFrame->RW == DMR_RW_UPLOAD) {
                                         sprintf_s(pOut, 1024, "Channel is %s", pFrame->Data[0] ? "Busy" : "Idle");
                                 }
                                 break;
