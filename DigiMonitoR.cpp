@@ -59,6 +59,7 @@ static std::unique_ptr<std::thread> Thread;
 static HANDLE hComPort = INVALID_HANDLE_VALUE;
 static std::mutex logMutex;
 static std::vector<uint8_t> dataBuffer;
+static volatile bool bQuitting;
 
 static void AddLogMessage(const std::string &Message)
 {
@@ -66,6 +67,10 @@ static void AddLogMessage(const std::string &Message)
         char TimeStamp[64];
         struct tm TimeInfo;
         time_t Now;
+
+        if (bQuitting) {
+                return;
+        }
 
         // Get the current text length
         int textLength = GetWindowTextLength(hLogPane);
@@ -120,6 +125,22 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                                 }
                                 break;
 
+                        case 0x05: // Ignore signal checks for now
+                                break;
+
+                        case 0x06:
+                                if (pFrame->RW == DMR_RW_UPLOAD) {
+                                        if (pFrame->Length[1] == 0x09) {
+                                                sprintf_s(pOut, 1024, "%s call started from %02X%02X%02X%02X to %02X%02X%02X%02X\n",
+                                                        (pFrame->Data[0] == 0x01) ? "Private" : ((pFrame->Data[0] == 0x02) ? "Group" : "All"),
+                                                        pFrame->Data[5], pFrame->Data[6], pFrame->Data[7], pFrame->Data[8],
+                                                        pFrame->Data[1], pFrame->Data[2], pFrame->Data[3], pFrame->Data[4]);
+                                        } else {
+                                                sprintf_s(pOut, 1024, "Call ended");
+                                        }
+                                }
+                                break;
+
                         case 0x09: // Alarm
                                 break;
 
@@ -158,8 +179,7 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                         case 0x2A:
                                 if (pFrame->RW == DMR_RW_TO_DMR) {
                                         if (DataLength == 4) {
-                                                //sprintf_s(pOut, 1024, "Set Local ID: %02X%02X%02X%02X", pFrame->Data[3], pFrame->Data[2], pFrame->Data[1], pFrame->Data[0]);
-                                                sprintf_s(pOut, 1024, "Set Local ID: 12345678");
+                                                sprintf_s(pOut, 1024, "Set Local ID: %02X%02X%02X%02X", pFrame->Data[3], pFrame->Data[2], pFrame->Data[1], pFrame->Data[0]);
                                         }
                                 }
                                 break;
@@ -193,13 +213,16 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                                 break;
 
                         case 0x59: // Digital service status
+                                if (pFrame->RW == DMR_RW_TO_HOST) {
+                                        sprintf_s(pOut, 1024, "Channel is %s", pFrame->Data[0] ? "Busy" : "Idle");
+                                }
                                 break;
 
                         case 0x62:
                                 if (DataLength == 10) {
                                         pOut[0] = 0;
-                                        sprintf_s(pOut, 1024, "%s Call from %02X%02X%02X%02X to %02X%02X%02X%02X in CC%d",
-                                                (pFrame->Data[0] == 0x01) ? "Individual" : ((pFrame->Data[0] == 0x02) ? "Group" : "All"),
+                                        sprintf_s(pOut, 1024, "Detected %s call from %02X%02X%02X%02X to %02X%02X%02X%02X in CC%d",
+                                                (pFrame->Data[0] == 0x01) ? "Private" : ((pFrame->Data[0] == 0x02) ? "Group" : "All"),
                                                 pFrame->Data[5], pFrame->Data[6], pFrame->Data[7], pFrame->Data[8],
                                                 pFrame->Data[1], pFrame->Data[2], pFrame->Data[3], pFrame->Data[4],
                                                 pFrame->Data[9]
@@ -279,16 +302,7 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                                 }
                                 break;
 
-#if 0
-                        case 0x05: // Query signal strength
-                                break;
-#endif
-
-                        case 0x06: // Make/Stop call;
-                                break;
-
                         default:
-                                printf("Unprocessed:");
                                 for (size_t i = 0; i < 9 + DataLength; i++) {
                                         char Hex[4];
                                         sprintf_s(Hex, sizeof(Hex), " %02X", pData[i]);
@@ -350,18 +364,22 @@ static void CaptureThread(void)
         const int BUFFER_SIZE = 1024;
         static uint8_t Buffer[BUFFER_SIZE];
 
-        while (isCapturing) {
+        while (isCapturing && !bQuitting) {
                 DWORD bytesRead = 0;
 
                 if (!ReadFile(hComPort, Buffer, BUFFER_SIZE, &bytesRead, NULL)) {
                         DWORD error = GetLastError();
 
+                        if (bQuitting || !isCapturing) {
+                                break;
+                        }
                         if (error != ERROR_IO_PENDING) {
                                 std::stringstream ss;
                                 ss << "Error reading from COM port (" << error << ").";
                                 AddLogMessage(ss.str());
                                 break;
                         }
+                        continue;
                 }
 
                 if (bytesRead > 0) {
@@ -518,17 +536,18 @@ static void StopCapture(void)
 
         // Signal the thread to stop
         isCapturing = false;
-
-        // Close the COM port
-        if (hComPort != INVALID_HANDLE_VALUE) {
-                CloseHandle(hComPort);
-                hComPort = INVALID_HANDLE_VALUE;
-        }
+        Sleep(250);
 
         // Wait for the thread to finish
         if (Thread && Thread->joinable()) {
                 Thread->join();
                 Thread.reset();
+        }
+
+        // Close the COM port
+        if (hComPort != INVALID_HANDLE_VALUE) {
+                CloseHandle(hComPort);
+                hComPort = INVALID_HANDLE_VALUE;
         }
 
         AddLogMessage("Stopped capturing data.");
@@ -619,6 +638,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 break;
 
         case WM_DESTROY:
+                bQuitting = true;
                 if (isCapturing) {
                         StopCapture();
                 }
