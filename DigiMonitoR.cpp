@@ -487,11 +487,11 @@ static void StartCapture(void)
                 return;
         }
 
-        timeouts.ReadIntervalTimeout = 50;
-        timeouts.ReadTotalTimeoutConstant = 50;
-        timeouts.ReadTotalTimeoutMultiplier = 10;
-        timeouts.WriteTotalTimeoutConstant = 50;
-        timeouts.WriteTotalTimeoutMultiplier = 10;
+        timeouts.ReadIntervalTimeout = MAXDWORD;
+        timeouts.ReadTotalTimeoutConstant = 100;
+        timeouts.ReadTotalTimeoutMultiplier = 0;
+        timeouts.WriteTotalTimeoutConstant = 100;
+        timeouts.WriteTotalTimeoutMultiplier = 0;
 
         if (!SetCommTimeouts(hComPort, &timeouts)) {
                 AddLogMessage("Error: Failed to set COM port timeouts.");
