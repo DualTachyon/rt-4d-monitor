@@ -16,14 +16,12 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <windowsx.h>
 #include <setupapi.h>
+#include <conio.h>
 #include <devguid.h>
 #include <string>
 #include <vector>
 #include <thread>
-#include <mutex>
-#include <sstream>
 
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "comctl32.lib")
@@ -48,44 +46,11 @@ typedef struct {
         uint8_t Data[];
 } DMR_Frame_t;
 
-static HWND hMainWnd = NULL;
-static HWND hComPortList = NULL;
-static HWND hRefreshButton = NULL;
-static HWND hStartStopButton = NULL;
-static HWND hLogPane = NULL;
-
 static volatile bool isCapturing;
+static volatile bool bQuitting = true;
 static std::unique_ptr<std::thread> Thread;
 static HANDLE hComPort = INVALID_HANDLE_VALUE;
-static std::mutex logMutex;
 static std::vector<uint8_t> dataBuffer;
-static volatile bool bQuitting;
-
-static void AddLogMessage(const std::string &Message)
-{
-        std::lock_guard<std::mutex> lock(logMutex);
-        char TimeStamp[64];
-        struct tm TimeInfo;
-        time_t Now;
-
-        if (bQuitting) {
-                return;
-        }
-
-        // Get the current text length
-        int textLength = GetWindowTextLength(hLogPane);
-
-        // Append the message with a timestamp
-        Now = time(nullptr);
-        localtime_s(&TimeInfo, &Now);
-        strftime(TimeStamp, sizeof(TimeStamp), "[%Y-%m-%d %H:%M:%S] ", &TimeInfo);
-
-        std::string formattedMessage = TimeStamp + Message + "\r\n";
-
-        SendMessage(hLogPane, EM_SETSEL, (WPARAM)textLength, (LPARAM)textLength);
-        SendMessage(hLogPane, EM_REPLACESEL, FALSE, (LPARAM)formattedMessage.c_str());
-        SendMessage(hLogPane, EM_SCROLLCARET, 0, 0);
-}
 
 static uint32_t GetId(const uint8_t *pData)
 {
@@ -102,11 +67,15 @@ static uint32_t GetId(const uint8_t *pData)
         return Value;
 }
 
-static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
+static bool ProcessMessage(const uint8_t *pData, size_t &Length)
 {
         const DMR_Frame_t *pFrame = (const DMR_Frame_t *)pData;
+        char Log[256];
+        char TimeStamp[64];
+        struct tm TimeInfo;
+        time_t Now;
 
-        pOut[0] = 0;
+        Log[0] = 0;
 
         if (pFrame->Head == DMR_FRAME_HEAD && Length >= sizeof(DMR_Frame_t) + 1) {
                 const uint16_t DataLength = (pFrame->Length[0] << 8) | pFrame->Length[1];
@@ -120,7 +89,7 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                         case 0x02:
                                 if (pFrame->RW == DMR_RW_TO_DMR) {
                                         if (DataLength == 1) {
-                                                sprintf_s(pOut, 1024, "Set RX Volume to %d", pFrame->Data[0]);
+                                                sprintf_s(Log, sizeof(Log), "Set RX Volume to %d", pFrame->Data[0]);
                                         }
                                 }
                                 break;
@@ -131,12 +100,12 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                         case 0x06:
                                 if (pFrame->RW == DMR_RW_UPLOAD) {
                                         if (pFrame->Length[1] == 0x09) {
-                                                sprintf_s(pOut, 1024, "%s call started from %02X%02X%02X%02X to %02X%02X%02X%02X\n",
+                                                sprintf_s(Log, sizeof(Log), "%s call started from %02X%02X%02X%02X to %02X%02X%02X%02X",
                                                         (pFrame->Data[0] == 0x01) ? "Private" : ((pFrame->Data[0] == 0x02) ? "Group" : "All"),
                                                         pFrame->Data[5], pFrame->Data[6], pFrame->Data[7], pFrame->Data[8],
                                                         pFrame->Data[1], pFrame->Data[2], pFrame->Data[3], pFrame->Data[4]);
                                         } else {
-                                                sprintf_s(pOut, 1024, "Call ended");
+                                                sprintf_s(Log, sizeof(Log), "Call ended");
                                         }
                                 }
                                 break;
@@ -147,7 +116,7 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                         case 0x0B:
                                 if (pFrame->RW == DMR_RW_TO_DMR) {
                                         if (DataLength == 1) {
-                                                sprintf_s(pOut, 1024, "Set MIC Gain to %d", pFrame->Data[0]);
+                                                sprintf_s(Log, sizeof(Log), "Set MIC Gain to %d", pFrame->Data[0]);
                                         }
                                 }
                                 break;
@@ -155,7 +124,7 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                         case 0x0C:
                                 if (pFrame->RW == DMR_RW_TO_DMR) {
                                         if (DataLength == 1) {
-                                                sprintf_s(pOut, 1024, "Set Power Saving Mode to %s",
+                                                sprintf_s(Log, sizeof(Log), "Set Power Saving Mode to %s",
                                                         (pFrame->Data[0] == 00) ? "Off" : (
                                                         (pFrame->Data[0] == 0x01) ? "Level 1" : (
                                                         (pFrame->Data[0] == 0x02) ? "Level 2" : "Level 3"))
@@ -165,13 +134,13 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                                 break;
 
                         case 0x1A:
-                                strcat_s(pOut, 1024, "Initialization Status");
+                                strcat_s(Log, sizeof(Log), "Initialization Status");
                                 break;
 
                         case 0x25:
                                 if (pFrame->RW == DMR_RW_TO_HOST) {
                                         if (DataLength == 4) {
-                                                sprintf_s(pOut, 1024, "Firmware: %X.%X.%X.%X", pFrame->Data[0], pFrame->Data[1], pFrame->Data[2], pFrame->Data[3]);
+                                                sprintf_s(Log, sizeof(Log), "Firmware: %X.%X.%X.%X", pFrame->Data[0], pFrame->Data[1], pFrame->Data[2], pFrame->Data[3]);
                                         }
                                 }
                                 break;
@@ -179,23 +148,23 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                         case 0x2A:
                                 if (pFrame->RW == DMR_RW_TO_DMR) {
                                         if (DataLength == 4) {
-                                                sprintf_s(pOut, 1024, "Set Local ID: %02X%02X%02X%02X", pFrame->Data[3], pFrame->Data[2], pFrame->Data[1], pFrame->Data[0]);
+                                                sprintf_s(Log, sizeof(Log), "Set Local ID: %02X%02X%02X%02X", pFrame->Data[3], pFrame->Data[2], pFrame->Data[1], pFrame->Data[0]);
                                         }
                                 }
                                 break;
 
                         case 0x3E:
                                 if (pFrame->RW == DMR_RW_TO_DMR) {
-                                        strcat_s(pOut, 1024, "Wake Up");
+                                        strcat_s(Log, sizeof(Log), "Wake Up");
                                 }
                                 break;
 
                         case 0x42:
-                                strcat_s(pOut, 1024, "Deep Sleep Mode");
+                                strcat_s(Log, sizeof(Log), "Deep Sleep Mode");
                                 break;
 
                         case 0x45:
-                                //strcat_s(pOut, 1024, "Set Alarm Configuration");
+                                strcat_s(Log, sizeof(Log), "Set Alarm Configuration");
                                 break;
 
                         case 0x48: // Remote monitoring duration
@@ -207,21 +176,20 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                         case 0x4D:
                                 if (pFrame->RW == DMR_RW_TO_DMR) {
                                         if (DataLength == 1) {
-                                                sprintf_s(pOut, 1024, "Set Squelch Level to %d", pFrame->Data[0]);
+                                                sprintf_s(Log, sizeof(Log), "Set Squelch Level to %d", pFrame->Data[0]);
                                         }
                                 }
                                 break;
 
                         case 0x59: // Digital service status
                                 if (pFrame->RW == DMR_RW_UPLOAD) {
-                                        sprintf_s(pOut, 1024, "Channel is %s", pFrame->Data[0] ? "Busy" : "Idle");
+                                        sprintf_s(Log, sizeof(Log), "Channel is %s", pFrame->Data[0] ? "Busy" : "Idle");
                                 }
                                 break;
 
                         case 0x62:
                                 if (DataLength == 10) {
-                                        pOut[0] = 0;
-                                        sprintf_s(pOut, 1024, "Detected %s call from %02X%02X%02X%02X to %02X%02X%02X%02X in CC%d",
+                                        sprintf_s(Log, sizeof(Log), "Detected %s call from %02X%02X%02X%02X to %02X%02X%02X%02X in CC%d",
                                                 (pFrame->Data[0] == 0x01) ? "Private" : ((pFrame->Data[0] == 0x02) ? "Group" : "All"),
                                                 pFrame->Data[5], pFrame->Data[6], pFrame->Data[7], pFrame->Data[8],
                                                 pFrame->Data[1], pFrame->Data[2], pFrame->Data[3], pFrame->Data[4],
@@ -235,31 +203,31 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                                         if (DataLength >= 7) {
                                                 size_t i, KeyLength = 0;
 
-                                                sprintf_s(pOut, 1024, "Set key: Seq %d, ", pFrame->Data[0]);
+                                                sprintf_s(Log, sizeof(Log), "Set key: Seq %d, ", pFrame->Data[0]);
 
                                                 switch (pFrame->Data[1]) {
                                                 case 0x00:
-                                                        strcat_s(pOut, 1024, "OFF");
+                                                        strcat_s(Log, sizeof(Log), "OFF");
                                                         break;
 
                                                 case 0x01:
-                                                        strcat_s(pOut, 1024, "ARC =");
+                                                        strcat_s(Log, sizeof(Log), "ARC =");
                                                         KeyLength = 5;
                                                         break;
 
                                                 case 0x04:
-                                                        strcat_s(pOut, 1024, "AES128 =");
+                                                        strcat_s(Log, sizeof(Log), "AES128 =");
                                                         KeyLength = 16;
                                                         break;
 
                                                 case 0x05:
-                                                        strcat_s(pOut, 1024, "AES256 =");
+                                                        strcat_s(Log, sizeof(Log), "AES256 =");
                                                         KeyLength = 32;
                                                         break;
                                                 }
 
                                                 if (!KeyLength) {
-                                                        pOut[0] = 0;
+                                                        Log[0] = 0;
                                                         break;
                                                 }
 
@@ -267,7 +235,7 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                                                         char Hex[4];
 
                                                         sprintf_s(Hex, sizeof(Hex), " %02X", pFrame->Data[2 + i]);
-                                                        strcat_s(pOut, 1024, Hex);
+                                                        strcat_s(Log, sizeof(Log), Hex);
                                                 }
                                         }
                                 }
@@ -279,7 +247,7 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                                                 const uint32_t RX = (pFrame->Data[3] << 24) | (pFrame->Data[4] << 16) | (pFrame->Data[5] << 8) | pFrame->Data[6];
                                                 const uint32_t TX = (pFrame->Data[7] << 24) | (pFrame->Data[8] << 16) | (pFrame->Data[9] << 8) | pFrame->Data[10];
 
-                                                sprintf_s(pOut, 1024, "Set Channel: TS%d CC%d RX %d TX %d", pFrame->Data[0], pFrame->Data[1], RX, TX);
+                                                sprintf_s(Log, sizeof(Log), "Set Channel: TS%d CC%d RX %d TX %d", pFrame->Data[0], pFrame->Data[1], RX, TX);
                                         }
                                 }
                                 break;
@@ -289,15 +257,15 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                                         if (DataLength >= 5) {
                                                 size_t i = pFrame->Data[0];
 
-                                                strcat_s(pOut, 1024, "Set group list:");
+                                                strcat_s(Log, sizeof(Log), "Set group list:");
                                                 for (i = 0; i < pFrame->Data[0] && i < DataLength - 1; i++) {
                                                         char Group[16];
 
                                                         sprintf_s(Group, sizeof(Group), " %d", GetId(&pFrame->Data[(i * 4) + 1]));
-                                                        strcat_s(pOut, 1024, Group);
+                                                        strcat_s(Log, sizeof(Log), Group);
                                                 }
                                         } else {
-                                                strcat_s(pOut, 1024, "Cleared group list");
+                                                strcat_s(Log, sizeof(Log), "Cleared group list");
                                         }
                                 }
                                 break;
@@ -306,9 +274,17 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
                                 for (size_t i = 0; i < 9 + DataLength; i++) {
                                         char Hex[4];
                                         sprintf_s(Hex, sizeof(Hex), " %02X", pData[i]);
-                                        strcat_s(pOut, 1024, Hex);
+                                        strcat_s(Log, sizeof(Log), Hex);
                                 }
                                 break;
+                        }
+
+                        if (Log[0]) {
+                                Now = time(nullptr);
+                                localtime_s(&TimeInfo, &Now);
+                                strftime(TimeStamp, sizeof(TimeStamp), "[%Y-%m-%d %H:%M:%S] ", &TimeInfo);
+
+                                printf("%s%s\n", TimeStamp, Log);
                         }
 
                         Length = sizeof(DMR_Frame_t) + 1 + DataLength;
@@ -322,7 +298,7 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length, char *pOut)
         return false;
 }
 
-static std::pair<bool, std::string> ScanForFrames(std::vector<uint8_t> &buffer)
+static bool ScanForFrames(std::vector<uint8_t> &buffer)
 {
         size_t i;
 
@@ -343,22 +319,21 @@ static std::pair<bool, std::string> ScanForFrames(std::vector<uint8_t> &buffer)
         }
 
         if (!buffer.size()) {
-                return { false, "" };
+                return false;
         }
 
         char Msg[1024];
         size_t Length = buffer.size();
         bool Success;
 
-        Success = ProcessMessage(buffer.data(), Length, Msg);
+        Success = ProcessMessage(buffer.data(), Length);
         if (Length) {
                 buffer.erase(buffer.begin(), buffer.begin() + Length);
         }
 
-        return { Success, Msg };
+        return Success;
 }
 
-// Capture thread function
 static void CaptureThread(void)
 {
         const int BUFFER_SIZE = 1024;
@@ -374,46 +349,33 @@ static void CaptureThread(void)
                                 break;
                         }
                         if (error != ERROR_IO_PENDING) {
-                                std::stringstream ss;
-                                ss << "Error reading from COM port (" << error << ").";
-                                AddLogMessage(ss.str());
+                                printf("Error reading from COM port (%d)\n", error);
+                                bQuitting = true;
                                 break;
                         }
-                        continue;
                 }
 
                 if (bytesRead > 0) {
-                        bool haveMessage = true;
-                        std::string message;
-
                         dataBuffer.insert(dataBuffer.end(), Buffer, Buffer + bytesRead);
 
-                        while (haveMessage) {
-                                auto result = ScanForFrames(dataBuffer);
-
-                                haveMessage = result.first;
-                                message = result.second;
-
-                                if (haveMessage && message.length() > 0) {
-                                        AddLogMessage(message);
-                                }
+                        while (ScanForFrames(dataBuffer)) {
                         }
                 }
+
+                Sleep(1);
         }
 }
 
 static void ScanComPorts(void)
 {
         SP_DEVINFO_DATA devData;
+        size_t Total = 0;
         DWORD i;
-
-        // Clear the current list
-        ComboBox_ResetContent(hComPortList);
 
         // Get a list of all COM ports
         HDEVINFO hDevInfo = SetupDiGetClassDevs(&GUID_DEVCLASS_PORTS, 0, 0, DIGCF_PRESENT);
         if (hDevInfo == INVALID_HANDLE_VALUE) {
-                AddLogMessage("Error: Failed to get device information.");
+                printf("Error: Failed to get device information.\n");
                 return;
         }
 
@@ -434,32 +396,26 @@ static void ScanComPorts(void)
 
                         if (startPos != std::string::npos && endPos != std::string::npos) {
                                 std::string comPort = portName.substr(startPos + 1, endPos - startPos - 1);
-                                ComboBox_AddString(hComPortList, comPort.c_str());
+                                printf("-> %s\n", comPort.c_str());
+                                Total++;
                         }
                 }
         }
 
         SetupDiDestroyDeviceInfoList(hDevInfo);
-
-        if (ComboBox_GetCount(hComPortList) > 0) {
-                ComboBox_SetCurSel(hComPortList, 0);
-                AddLogMessage("COM ports refreshed.");
-        } else {
-                AddLogMessage("No COM ports found.");
+        if (!Total) {
+                printf("No COM ports found.\n");
         }
 }
 
-static void StartCapture(void)
+static void StartCapture(const char *portName)
 {
-        char portName[32];
         DCB dcb;
         COMMTIMEOUTS timeouts;
 
         if (isCapturing) {
                 return;
         }
-
-        ComboBox_GetText(hComPortList, portName, sizeof(portName));
 
         // Open the COM port
         std::string fullPortName = "\\\\.\\";
@@ -477,9 +433,7 @@ static void StartCapture(void)
         if (hComPort == INVALID_HANDLE_VALUE) {
                 DWORD error = GetLastError();
 
-                std::stringstream ss;
-                ss << "Error: Failed to open COM port (" << error << ").";
-                AddLogMessage(ss.str());
+                printf("Error: Failed to open COM port (%d).\n", error);
                 return;
         }
 
@@ -487,7 +441,7 @@ static void StartCapture(void)
         dcb.DCBlength = sizeof(dcb);
 
         if (!GetCommState(hComPort, &dcb)) {
-                AddLogMessage("Error: Failed to get COM port state.");
+                printf("Error: Failed to get COM port state.\n");
                 CloseHandle(hComPort);
                 hComPort = INVALID_HANDLE_VALUE;
                 return;
@@ -499,7 +453,7 @@ static void StartCapture(void)
         dcb.StopBits = ONESTOPBIT;
 
         if (!SetCommState(hComPort, &dcb)) {
-                AddLogMessage("Error: Failed to set COM port state.");
+                printf("Error: Failed to set COM port state.\n");
                 CloseHandle(hComPort);
                 hComPort = INVALID_HANDLE_VALUE;
                 return;
@@ -512,7 +466,7 @@ static void StartCapture(void)
         timeouts.WriteTotalTimeoutMultiplier = 0;
 
         if (!SetCommTimeouts(hComPort, &timeouts)) {
-                AddLogMessage("Error: Failed to set COM port timeouts.");
+                printf("Error: Failed to set COM port timeouts.\n");
                 CloseHandle(hComPort);
                 hComPort = INVALID_HANDLE_VALUE;
                 return;
@@ -521,11 +475,10 @@ static void StartCapture(void)
         dataBuffer.clear();
 
         isCapturing = true;
+        bQuitting = false;
         Thread = std::make_unique<std::thread>(CaptureThread);
 
-        std::stringstream ss;
-        ss << "Started capturing data from " << portName << ".";
-        AddLogMessage(ss.str());
+        printf("Started capturing data from %s\n", portName);
 }
 
 static void StopCapture(void)
@@ -550,158 +503,29 @@ static void StopCapture(void)
                 hComPort = INVALID_HANDLE_VALUE;
         }
 
-        AddLogMessage("Stopped capturing data.");
+        printf("Stopped capturing data.\n");
 }
 
-LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+int main(int argc, char *argv[])
 {
-        HINSTANCE hInstance;
-        HFONT hFont;
-        int wmId;
-        int clientWidth;
-        int clientHeight;
-
-        switch (message) {
-        case WM_CREATE:
-                hInstance = ((LPCREATESTRUCT)lParam)->hInstance;
-
-                hComPortList = CreateWindow(
-                        WC_COMBOBOX, TEXT(""),
-                        WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-                        10, 10, 200, 200,
-                        hWnd, (HMENU)1, hInstance, NULL);
-
-                hRefreshButton = CreateWindow(
-                        WC_BUTTON, TEXT("Refresh"),
-                        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                        220, 10, 100, 25,
-                        hWnd, (HMENU)2, hInstance, NULL);
-
-                hStartStopButton = CreateWindow(
-                        WC_BUTTON, TEXT("Start"),
-                        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                        330, 10, 100, 25,
-                        hWnd, (HMENU)3, hInstance, NULL);
-
-                hLogPane = CreateWindow(
-                        WC_EDIT, TEXT(""),
-                        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_READONLY,
-                        10, 45, 760, 500,
-                        hWnd, (HMENU)4, hInstance, NULL);
-
-                hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-                SendMessage(hComPortList, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(TRUE, 0));
-                SendMessage(hRefreshButton, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(TRUE, 0));
-                SendMessage(hStartStopButton, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(TRUE, 0));
-                SendMessage(hLogPane, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(TRUE, 0));
-
+        if (argc == 2 && strcmp(argv[1], "-l") == 0) {
                 ScanComPorts();
-
-                AddLogMessage("Application started. Select a COM port and click Start to begin capturing data.");
-                break;
-
-        case WM_COMMAND:
-                wmId = LOWORD(wParam);
-
-                switch (wmId) {
-                case 2: // Refresh button
-                        ScanComPorts();
-                        break;
-
-                case 3: // Start/Stop button
-                        if (isCapturing) {
-                                StopCapture();
-                                SetWindowText(hStartStopButton, TEXT("Start"));
-                        } else {
-                                // Get the selected COM port
-                                int selectedIndex = ComboBox_GetCurSel(hComPortList);
-                                if (selectedIndex != CB_ERR) {
-                                        char portName[32];
-                                        ComboBox_GetText(hComPortList, portName, sizeof(portName));
-
-                                        StartCapture();
-                                        SetWindowText(hStartStopButton, TEXT("Stop"));
-                                } else {
-                                        AddLogMessage("Error: No COM port selected.");
-                                }
-                        }
-                        break;
-                }
-                break;
-
-        case WM_SIZE:
-                clientWidth = LOWORD(lParam);
-                clientHeight = HIWORD(lParam);
-
-                // Resize the log pane
-                MoveWindow(hLogPane, 10, 45, clientWidth - 20, clientHeight - 55, TRUE);
-                break;
-
-        case WM_DESTROY:
-                bQuitting = true;
-                if (isCapturing) {
-                        StopCapture();
-                }
-                PostQuitMessage(0);
-                break;
-
-        default:
-                return DefWindowProc(hWnd, message, wParam, lParam);
+                return 0;
         }
+        if (argc != 3 || strcmp(argv[1], "-p")) {
+                printf("Usage:\n");
+                printf("    %s -l         List available COM ports.\n", argv[0]);
+                printf("    %s -p COMx    Start capture on port COMx.\n", argv[0]);
+                return 1;
+        }
+
+        StartCapture(argv[2]);
+
+        while (!_kbhit() && !bQuitting) {
+                Sleep(100);
+        }
+
+        StopCapture();
 
         return 0;
 }
-
-int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nCmdShow)
-{
-        INITCOMMONCONTROLSEX iccex;
-        WNDCLASSEX wcex;
-        MSG msg;
-
-        iccex.dwSize = sizeof(INITCOMMONCONTROLSEX);
-        iccex.dwICC = ICC_WIN95_CLASSES;
-        InitCommonControlsEx(&iccex);
-
-        wcex.cbSize = sizeof(WNDCLASSEX);
-        wcex.style = CS_HREDRAW | CS_VREDRAW;
-        wcex.lpfnWndProc = WndProc;
-        wcex.cbClsExtra = 0;
-        wcex.cbWndExtra = 0;
-        wcex.hInstance = hInstance;
-        wcex.hIcon = LoadIcon(hInstance, IDI_APPLICATION);
-        wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
-        wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-        wcex.lpszMenuName = NULL;
-        wcex.lpszClassName = TEXT("DigiMonitoR");
-        wcex.hIconSm = LoadIcon(wcex.hInstance, IDI_APPLICATION);
-
-        if (!RegisterClassEx(&wcex)) {
-                MessageBox(NULL, TEXT("Window Registration Failed"), TEXT("Error"), MB_ICONERROR);
-                return 1;
-        }
-
-        // Create the main window
-        hMainWnd = CreateWindow(TEXT("DigiMonitoR"), TEXT("DigiMonitoR"),
-                WS_OVERLAPPEDWINDOW,
-                CW_USEDEFAULT, CW_USEDEFAULT,
-                800, 600,
-                NULL, NULL, hInstance, NULL);
-
-        if (!hMainWnd) {
-                MessageBox(NULL, TEXT("Window Creation Failed"), TEXT("Error"), MB_ICONERROR);
-                return 1;
-        }
-
-        // Show and update the window
-        ShowWindow(hMainWnd, nCmdShow);
-        UpdateWindow(hMainWnd);
-
-        // Main message loop
-        while (GetMessage(&msg, NULL, 0, 0)) {
-                TranslateMessage(&msg);
-                DispatchMessage(&msg);
-        }
-
-        return (int)msg.wParam;
-}
-

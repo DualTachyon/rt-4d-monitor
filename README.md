@@ -19,10 +19,9 @@ msbuild DigiMonitoR.sln -p:Configuration=Release
 
 # How to use
 
-* Launch the executable
-* Select the COM port corresponding to your Radtel RT-4D
-* Click the Start button
-* While the transceiver is off, hold the SIDE 1 button and turn it on
+* Launch the executable with -l to list available COM ports.
+* Launch the executable with -p COMx to monitor your RT-4D.
+* While the transceiver is off, hold the SIDE 1 button and turn it on.
 * Release the button after 1-2 seconds.
 * Enjoy the view
 
