@@ -46,9 +46,6 @@ typedef struct {
         uint8_t Data[];
 } DMR_Frame_t;
 
-static volatile bool isCapturing;
-static volatile bool bQuitting = true;
-static std::unique_ptr<std::thread> Thread;
 static HANDLE hComPort = INVALID_HANDLE_VALUE;
 static std::vector<uint8_t> dataBuffer;
 
@@ -300,6 +297,9 @@ static bool ProcessMessage(const uint8_t *pData, size_t &Length)
 
 static bool ScanForFrames(std::vector<uint8_t> &buffer)
 {
+        char Msg[512];
+        size_t Length;
+        bool Success;
         size_t i;
 
         while (buffer.size()) {
@@ -322,9 +322,7 @@ static bool ScanForFrames(std::vector<uint8_t> &buffer)
                 return false;
         }
 
-        char Msg[1024];
-        size_t Length = buffer.size();
-        bool Success;
+        Length = buffer.size();
 
         Success = ProcessMessage(buffer.data(), Length);
         if (Length) {
@@ -334,23 +332,19 @@ static bool ScanForFrames(std::vector<uint8_t> &buffer)
         return Success;
 }
 
-static void CaptureThread(void)
+static void Capture(void)
 {
         const int BUFFER_SIZE = 1024;
         static uint8_t Buffer[BUFFER_SIZE];
 
-        while (isCapturing && !bQuitting) {
+        while (!_kbhit()) {
                 DWORD bytesRead = 0;
 
                 if (!ReadFile(hComPort, Buffer, BUFFER_SIZE, &bytesRead, NULL)) {
                         DWORD error = GetLastError();
 
-                        if (bQuitting || !isCapturing) {
-                                break;
-                        }
                         if (error != ERROR_IO_PENDING) {
                                 printf("Error reading from COM port (%d)\n", error);
-                                bQuitting = true;
                                 break;
                         }
                 }
@@ -413,10 +407,6 @@ static void StartCapture(const char *portName)
         DCB dcb;
         COMMTIMEOUTS timeouts;
 
-        if (isCapturing) {
-                return;
-        }
-
         // Open the COM port
         std::string fullPortName = "\\\\.\\";
         fullPortName += portName;
@@ -474,29 +464,11 @@ static void StartCapture(const char *portName)
 
         dataBuffer.clear();
 
-        isCapturing = true;
-        bQuitting = false;
-        Thread = std::make_unique<std::thread>(CaptureThread);
-
         printf("Started capturing data from %s\n", portName);
 }
 
 static void StopCapture(void)
 {
-        if (!isCapturing) {
-                return;
-        }
-
-        // Signal the thread to stop
-        isCapturing = false;
-        Sleep(250);
-
-        // Wait for the thread to finish
-        if (Thread && Thread->joinable()) {
-                Thread->join();
-                Thread.reset();
-        }
-
         // Close the COM port
         if (hComPort != INVALID_HANDLE_VALUE) {
                 CloseHandle(hComPort);
@@ -521,9 +493,7 @@ int main(int argc, char *argv[])
 
         StartCapture(argv[2]);
 
-        while (!_kbhit() && !bQuitting) {
-                Sleep(100);
-        }
+        Capture();
 
         StopCapture();
 
