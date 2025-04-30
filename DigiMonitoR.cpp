@@ -449,7 +449,7 @@ static void StartCapture(const char *portName)
                 return;
         }
 
-        timeouts.ReadIntervalTimeout = MAXDWORD;
+        timeouts.ReadIntervalTimeout = 0;
         timeouts.ReadTotalTimeoutConstant = 100;
         timeouts.ReadTotalTimeoutMultiplier = 0;
         timeouts.WriteTotalTimeoutConstant = 100;
