@@ -254,46 +254,72 @@ static bool ProcessMessage(uint8_t *pData, size_t &Length, char *pOut, size_t Ou
                                 break;
 
                         case 0x60:
-                                if (DataLength == 34) {
+                                if (DataLength == 34 && pFrame->Data[0] == 2) {
+                                        char String[128];
+                                        wchar_t WString[128];
+                                        int Len;
                                         uint8_t i;
 
-                                        if (pFrame->Data[0] == 2) {
-                                                char String[128];
-                                                wchar_t WString[128];
-                                                int Len;
+                                        switch (pFrame->Data[1]) {
+                                        case 0:
+                                        case 2:
+                                                memcpy(String, pFrame->Data + 3, pFrame->Data[2]);
+                                                String[pFrame->Data[2]] = 0;
+                                                break;
 
-                                                switch (pFrame->Data[1]) {
-                                                case 0:
-                                                case 2:
-                                                        memcpy(String, pFrame->Data + 3, pFrame->Data[2]);
-                                                        String[pFrame->Data[2]] = 0;
-                                                        break;
+                                        case 1:
+                                                Len = MultiByteToWideChar(28591, 0, (char *)pFrame->Data + 3, pFrame->Data[2], WString, 128);
+                                                Len = WideCharToMultiByte(CP_UTF8, 0, WString, Len, String, 127, NULL, NULL);
+                                                String[Len] = 0;
+                                                break;
 
-                                                case 1:
-                                                        Len = MultiByteToWideChar(28591, 0, (char *)pFrame->Data + 3, pFrame->Data[2], WString, 128);
-                                                        Len = WideCharToMultiByte(CP_UTF8, 0, WString, Len, String, 127, NULL, NULL);
-                                                        String[Len] = 0;
-                                                        break;
-
-                                                case 3:
-                                                        for (i = 0; i < pFrame->Data[2]; i++) {
-                                                                WString[i] = (pFrame->Data[3 + (i * 2) + 0] << 8) | pFrame->Data[3 + (i * 2) + 1];
-                                                        }
-                                                        WString[i] = 0;
-                                                        Len = WideCharToMultiByte(CP_UTF8, 0, WString, i, String, 127, NULL, NULL);
-                                                        String[Len] = 0;
-                                                        break;
+                                        case 3:
+                                                for (i = 0; i < pFrame->Data[2]; i++) {
+                                                        WString[i] = (pFrame->Data[3 + (i * 2) + 0] << 8) | pFrame->Data[3 + (i * 2) + 1];
                                                 }
-                                                sprintf_s(pOut, OutLength, "Talker Alias(%d): %s", pFrame->Data[1], String);
-                                        } else {
-                                                sprintf_s(pOut, OutLength, "In Band:");
+                                                WString[i] = 0;
+                                                Len = WideCharToMultiByte(CP_UTF8, 0, WString, i, String, 127, NULL, NULL);
+                                                String[Len] = 0;
+                                                break;
+                                        }
+                                        sprintf_s(pOut, OutLength, "Talker Alias(%d): %s", pFrame->Data[1], String);
+                                } else if (DataLength == 10 && pFrame->Data[0] == 1) {
+                                        uint32_t Longitude = (pFrame->Data[2] << 24) | (pFrame->Data[3] << 16) | (pFrame->Data[4] << 8) | pFrame->Data[5];
+                                        uint32_t Latitude = (pFrame->Data[6] << 24) | (pFrame->Data[7] << 16) | (pFrame->Data[8] << 8) | pFrame->Data[9];
+                                        char LonDirection = 'E';
+                                        char LatDirection = 'N';
+                                        double Lon;
+                                        double Lat;
 
-                                                for (i = 0; i < 34; i++) {
-                                                        char Tmp[8];
+                                        Longitude &= 0x1FFFFFF;
+                                        Latitude &= 0xFFFFFF;
 
-                                                        sprintf_s(Tmp, sizeof(Tmp), " %02X", pFrame->Data[i]);
-                                                        strcat_s(pOut, OutLength, Tmp);
-                                                }
+                                        Lon = Longitude * 360;
+                                        Lat = Latitude * 180;
+
+                                        Lon /= 33554432;
+                                        Lat /= 16777216;
+
+                                        if (Lon < 0.0) {
+                                                Lon = -Lon;
+                                                LonDirection = 'W';
+                                        }
+                                        if (Lat < 0.0) {
+                                                Lat = -Lat;
+                                                LatDirection = 'S';
+                                        }
+
+                                        sprintf_s(pOut, OutLength, "GPS: %.6f%c %.6f%c", Lat, LatDirection, Lon, LonDirection);
+                                } else {
+                                        uint8_t i;
+
+                                        sprintf_s(pOut, OutLength, "In Band:");
+
+                                        for (i = 0; i < DataLength; i++) {
+                                                char Tmp[8];
+
+                                                sprintf_s(Tmp, sizeof(Tmp), " %02X", pFrame->Data[i]);
+                                                strcat_s(pOut, OutLength, Tmp);
                                         }
                                 }
                                 break;
