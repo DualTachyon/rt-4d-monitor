@@ -284,15 +284,19 @@ static bool ProcessMessage(uint8_t *pData, size_t &Length, char *pOut, size_t Ou
                                         }
                                         sprintf_s(pOut, OutLength, "Talker Alias(%d): %s", pFrame->Data[1], String);
                                 } else if (DataLength == 10 && pFrame->Data[0] == 1) {
-                                        uint32_t Longitude = (pFrame->Data[2] << 24) | (pFrame->Data[3] << 16) | (pFrame->Data[4] << 8) | pFrame->Data[5];
-                                        uint32_t Latitude = (pFrame->Data[6] << 24) | (pFrame->Data[7] << 16) | (pFrame->Data[8] << 8) | pFrame->Data[9];
+                                        int32_t Longitude = (pFrame->Data[2] << 24) | (pFrame->Data[3] << 16) | (pFrame->Data[4] << 8) | pFrame->Data[5];
+                                        int32_t Latitude = (pFrame->Data[6] << 24) | (pFrame->Data[7] << 16) | (pFrame->Data[8] << 8) | pFrame->Data[9];
                                         char LonDirection = 'E';
                                         char LatDirection = 'N';
                                         double Lon;
                                         double Lat;
 
                                         Longitude &= 0x1FFFFFF;
+                                        Longitude <<= 7;
+                                        Longitude >>= 7;
                                         Latitude &= 0xFFFFFF;
+                                        Latitude <<= 8;
+                                        Latitude >>= 8;
 
                                         Lon = Longitude * 360;
                                         Lat = Latitude * 180;
