@@ -24,6 +24,7 @@
 #include <thread>
 #include <mutex>
 #include <Richedit.h>
+#include "resource.h"
 
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "comctl32.lib")
@@ -836,7 +837,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
         wcex.cbClsExtra = 0;
         wcex.cbWndExtra = 0;
         wcex.hInstance = hInstance;
-        wcex.hIcon = LoadIcon(hInstance, IDI_APPLICATION);
+        wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1));
         wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
         wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
         wcex.lpszMenuName = NULL;
