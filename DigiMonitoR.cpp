@@ -754,7 +754,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                                         ComboBox_GetText(hComPortList, portName, sizeof(portName));
 
                                         StartCapture();
-                                        SetWindowText(hStartStopButton, TEXT("Stop"));
+                                        if (hComPort != INVALID_HANDLE_VALUE) {
+                                                SetWindowText(hStartStopButton, TEXT("Stop"));
+                                        }
                                 } else {
                                         AddLogMessage("Error: No COM port selected.");
                                 }
